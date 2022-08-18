@@ -42,6 +42,8 @@ class NTU60(Dataset):
         split: str = "train",
         joint_type: Union[List[str], str] = "3d",
         max_bodies: int = 2,
+        length_threshold: int = 11,
+        spread_threshold: float = 0.8,
         transform=None,
         pre_transform=None,
         pre_filter=None,
@@ -53,6 +55,9 @@ class NTU60(Dataset):
 
         self.joint_type = joint_type
         self.max_bodies = max_bodies
+
+        self.length_threshold = length_threshold
+        self.spread_threshold = spread_threshold
 
         self.debug = debug
 
@@ -244,13 +249,13 @@ class NTU60(Dataset):
                 return None
 
             # denoise based on frame length
-            bodies = self.filter_by_length(raw_bodies, 10)
+            bodies = self.filter_by_length(raw_bodies, self.length_threshold)
             num_bodies = len(bodies.keys())
             if num_bodies == 0:
                 return None
 
             # denoise based on spread
-            bodies = self.filter_by_spread(bodies, 0.8)
+            bodies = self.filter_by_spread(bodies, self.spread_threshold)
             num_bodies = len(bodies.keys())
             if num_bodies == 0:
                 return None
