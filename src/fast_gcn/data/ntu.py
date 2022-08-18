@@ -1,6 +1,8 @@
 import os
 import os.path as osp
 
+import zipfile
+
 from dataclasses import dataclass
 
 from multiprocessing import Pool
@@ -43,16 +45,30 @@ class NTU60(Dataset):
         transform=None,
         pre_transform=None,
         pre_filter=None,
+        debug=False,
     ):
         self.root = root
         self.benchmark = benchmark
         self.split = split
-        self.joint_type = joint_type
 
+        self.joint_type = joint_type
         self.max_bodies = max_bodies
+
+        self.debug = debug
 
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data_list = torch.load(self.processed_paths[0])
+
+    @property
+    def num_joints(self) -> int:
+        return 25
+
+    @property
+    def num_features(self) -> int:
+        if self.joint_type == "3d":
+            return 3
+        else:
+            return 2
 
     @property
     def raw_file_names(self) -> List[str]:
@@ -69,7 +85,10 @@ class NTU60(Dataset):
     @property
     def processed_dir(self) -> str:
         return osp.join(
-            self.root, "NTURGBD", "processed", f"ntu60_{self.benchmark}_{self.split}"
+            self.root,
+            "NTURGBD",
+            "processed",
+            f"ntu60_{self.benchmark}_{self.joint_type}_{self.max_bodies}_{self.split}",
         )
 
     @property
@@ -86,12 +105,22 @@ class NTU60(Dataset):
                 download_rose_url(session, url, self.raw_dir)
 
     def extract(self):
-        ntu60_file = self.raw_file_names[0]
-        extract_zip(osp.join(self.raw_dir, ntu60_file), self.raw_dir)
+        ntu60_file_path = osp.join(self.raw_dir, self.raw_file_names[0])
+
+        if self.check_zip(ntu60_file_path, "nturgb+d_skeletons/"):
+            extract_zip(ntu60_file_path, self.raw_dir)
+
+        return
+
+    def check_zip(self, zip_path, at=""):
+        zipfile_path = zipfile.Path(zip_path, at)
+        for path in zipfile_path.iterdir():
+            if osp.exists(osp.join(self.extract_dir, path.name)) is False:
+                return True
+        return False
 
     def process(self):
-        if not osp.exists(self.extract_dir):
-            self.extract()
+        self.extract()
 
         self.edge_index = (
             torch.tensor(
@@ -147,8 +176,11 @@ class NTU60(Dataset):
             if curr_split == self.split:
                 file_list.append(osp.join(self.extract_dir, filename))
 
-        with Pool(os.cpu_count()) as p:
-            data_list_with_nones = p.map(self.process_one, file_list)
+        if self.debug:
+            data_list_with_nones = map(self.process_path, file_list)
+        else:
+            with Pool(os.cpu_count()) as p:
+                data_list_with_nones = p.map(self.process_path, file_list)
 
         data_list = []
         for data in data_list_with_nones:
@@ -163,7 +195,7 @@ class NTU60(Dataset):
 
         torch.save(data_list, self.processed_paths[0])
 
-    def process_one(self, path):
+    def process_path(self, path):
         with open(path, "r") as f:
             lines = f.read().splitlines()
 
@@ -172,8 +204,7 @@ class NTU60(Dataset):
         filename = osp.basename(path)
         label = int(filename[17:20]) - 1
 
-        body_ids = set()
-        frames = []
+        raw_frames = []
         for frame in raw_skeleton_sequence.frames:
             if frame.num_skeletons == 0:
                 continue
@@ -192,64 +223,174 @@ class NTU60(Dataset):
 
                     joints.append(torch.tensor(joint_feature, dtype=torch.float16))
 
-                body_id = skeleton.body_id
-                body_ids.add(body_id)
-                skeletons[body_id] = torch.stack(joints, dim=0)
+                skeletons[skeleton.body_id] = torch.stack(joints, dim=0)
 
-            frames.append(skeletons)
+            raw_frames.append(skeletons)
 
+        body_ids = self.extract_body_ids(raw_frames)
         num_bodies = len(body_ids)
 
         if num_bodies == 0:
             return None
 
         if num_bodies <= self.max_bodies:
-            skeleton_sequence = self.pad_bodies(frames, body_ids)
+            frames = raw_frames
+            x = self.pad_frames(raw_frames)
 
         if num_bodies > self.max_bodies:
+            raw_bodies = self.group_by_bodies(raw_frames)
+            num_bodies = len(raw_bodies.keys())
+            if num_bodies == 0:
+                return None
+
             # denoise based on frame length
-            frames = self.filter_short_bodies(frames, body_ids, 10)
+            bodies = self.filter_by_length(raw_bodies, 10)
+            num_bodies = len(bodies.keys())
+            if num_bodies == 0:
+                return None
 
             # denoise based on spread
-            frames = self.filter_spread_bodies(frames, body_ids)
+            bodies = self.filter_by_spread(bodies, 0.8)
+            num_bodies = len(bodies.keys())
+            if num_bodies == 0:
+                return None
 
-            motions = []
-            for body_sequence in skeleton_sequence:
-                motion = torch.sum(torch.var(body_sequence, dim=0))
-                motions.append(motion)
+            # add motion data
+            frames = self.filter_by_motion(bodies)
 
-        return Data(x=skeleton_sequence, edge_index=self.edge_index, y=label)
+            body_ids = self.extract_body_ids(frames)
+            num_bodies = len(body_ids)
+            if num_bodies == 0:
+                return None
 
-    def pad_bodies(self, frames, body_ids):
-        skeleton_sequence = []
-        for frame in frames:
-            skeletons = []
-            for body_id in body_ids:
-                if body_id in frame.keys():
-                    skeletons.append(frame[body_id])
-                else:
-                    k = list(frame.keys())[0]
-                    skeletons.append(torch.zeros_like(frame[k]))
+            x = self.pad_frames(frames)
 
-            while len(skeletons) < self.max_bodies:
-                skeletons.append(torch.zeros_like(skeletons[0]))
+        assert x.size(1) == self.max_bodies, breakpoint()
 
-            skeletons = torch.stack(skeletons, dim=0)
-            skeleton_sequence.append(skeletons)
+        return Data(x=x, edge_index=self.edge_index, y=label)
 
-        skeleton_sequence = torch.stack(skeleton_sequence, dim=0)
-        return skeleton_sequence
+    def group_by_bodies(self, raw_frames):
+        body_ids = self.extract_body_ids(raw_frames)
 
-    def filter_short_bodies(self, frames, body_ids, threshold):
+        bodies = {body_id: {"frames": [], "indices": []} for body_id in body_ids}
         for body_id in body_ids:
-            length = 0
-            for frame in frames:
+            frames = []
+            indices = []
+            for i, raw_frame in enumerate(raw_frames):
+                if body_id in raw_frame.keys():
+                    frames.append(raw_frame[body_id])
+                    indices.append(i)
+
+            bodies[body_id] = {
+                "frames": torch.stack(frames, dim=0),
+                "indices": torch.tensor(indices),
+            }
+
+        return bodies
+
+    def ungroup_to_frames(self, bodies):
+        max_length = 0
+        for body_id, body in bodies.items():
+            max_length = max(max_length, max(body["indices"]))
+
+        ungrouped_frames = []
+        for i in range(max_length):
+            frame = {}
+            for body_id, body in bodies.items():
+                frames = body["frames"]
+                indices = body["indices"]
+
+                if i in indices:
+                    frame[body_id] = frames[indices == i]
+
+            ungrouped_frames.append(frame)
+
+        return ungrouped_frames
+
+    def extract_body_ids(self, frames):
+        body_ids = set()
+        for frame in frames:
+            for body_id in frame.keys():
+                body_ids.add(body_id)
+
+        return body_ids
+
+    def pad_frames(self, raw_frames):
+        body_ids = self.extract_body_ids(raw_frames)
+
+        frames = []
+        for frame in raw_frames:
+            skeletons = torch.zeros(
+                self.max_bodies, self.num_joints, self.num_features
+            ).float()
+
+            for i, body_id in enumerate(body_ids):
                 if body_id in frame.keys():
-                    length += 1
+                    skeletons[i] = frame[body_id]
+
+            frames.append(skeletons)
+
+        frames = torch.stack(frames, dim=0)
+        return frames
+
+    def filter_by_length(self, bodies, threshold):
+        if len(bodies.keys()) <= self.max_bodies:
+            return bodies
+
+        body_ids = list(bodies.keys())
+        for body_id in body_ids:
+            length = bodies[body_id]["indices"].size(0)
+
             if length <= threshold:
-                body_ids.remove(body_id)
-                for i in range(len(frames)):
-                    del frames[i][body_id]
+                del bodies[body_id]
+
+        return bodies
+
+    def filter_by_spread(self, bodies, threshold):
+        if len(bodies.keys()) <= self.max_bodies:
+            return bodies
+
+        body_ids = list(bodies.keys())
+        for body_id in body_ids:
+            frames = bodies[body_id]["frames"]
+
+            max_xy = frames[:, :, 0:2].max(dim=-1).values
+            min_xy = frames[:, :, 0:2].min(dim=-1).values
+
+            x = max_xy[:, 0] - min_xy[:, 0]
+            y = max_xy[:, 1] - min_xy[:, 1]
+
+            mask = x <= threshold * y
+            ratio = mask.float().mean().cpu().item()
+
+            if ratio < threshold:
+                del bodies[body_id]
+
+        return bodies
+
+    def filter_by_motion(self, bodies):
+        frames = self.ungroup_to_frames(bodies)
+
+        if len(bodies.keys()) <= self.max_bodies:
+            return frames
+
+        motion = {}
+        for body_id in bodies.keys():
+            motion[body_id] = torch.sum(torch.var(bodies[body_id]["frames"], dim=0))
+
+        motion = torch.stack(list(motion.values()), dim=0)
+        sorted_motion = motion.sort(descending=True)
+
+        body_ids = list(bodies.keys())
+        indices = sorted_motion.indices[: self.max_bodies]
+        body_ids = [body_ids[i] for i in indices]
+
+        for i, frame in enumerate(frames):
+            frame_body_ids = list(frame.keys())
+            for frame_body_id in frame_body_ids:
+                if frame_body_id not in body_ids:
+                    del frames[i][frame_body_id]
+
         return frames
 
     def len(self):
@@ -280,8 +421,12 @@ class NTU120(NTU60):
 
     def extract(self):
         super().extract()
-        ntu120_file = self.raw_file_names[1]
-        extract_zip(ntu120_file, self.extract_dir)
+
+        ntu120_file_path = osp.join(self.raw_dir, self.raw_file_names[1])
+        extract_zip(ntu120_file_path, self.extract_dir)
+
+        if self.check_zip(ntu120_file_path):
+            extract_zip(ntu120_file_path, self.raw_dir)
 
     def process(self):
         super().process()
