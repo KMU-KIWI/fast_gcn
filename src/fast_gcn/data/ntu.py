@@ -276,7 +276,7 @@ class NTU60(NTU):
         )
 
     def extract(self):
-        ntu60_file_path = osp.join(self.root, "nturgbd_skeletons_s001_to_s017.zip")
+        ntu60_file_path = osp.join(self.root, self.raw_file_names[0])
 
         internal_dir = "nturgb+d_skeletons/"
         if not zip_extracted(self.raw_dir, ntu60_file_path, internal_dir):
@@ -307,16 +307,17 @@ class NTU120(NTU):
         )
 
     def extract(self):
-        ntu60_file_path = osp.join(self.root, "nturgbd_skeletons_s001_to_s017.zip")
-        ntu120_file_path = osp.join(self.root, "nturgbd_skeletons_s018_to_s032.zip")
+        ntu60_file_path = osp.join(self.root, self.raw_file_names[0])
 
         internal_dir = "nturgb+d_skeletons/"
         if not zip_extracted(self.raw_dir, ntu60_file_path, internal_dir):
             extract_zip(ntu60_file_path, self.base_dir)
             os.rename(osp.join(self.base_dir, internal_dir), self.raw_dir)
 
+        ntu120_file_path = osp.join(self.root, self.raw_file_names[1])
+
         if not zip_extracted(self.raw_dir, ntu120_file_path):
-            extract_zip(ntu60_file_path, osp.join(self.raw_dir, "nturgb+d_skeletons"))
+            extract_zip(ntu120_file_path, self.raw_dir)
 
 
 def login_rose():
