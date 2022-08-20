@@ -1,9 +1,9 @@
 import os
 import os.path as osp
 
-import zipfile
+from typing import List, Union
 
-from dataclasses import dataclass
+import zipfile
 
 from multiprocessing import Pool
 
@@ -11,7 +11,44 @@ import torch
 
 from torch_geometric.data import Dataset, Data, extract_zip
 
-from typing import List, Union
+from ._dataclasses import SkeletonSequence, Bodies
+from .functions import filter_by_length, filter_by_spread, filter_by_motion, pad_frames
+
+
+edge_index = [
+    [1, 2],
+    [2, 21],
+    [3, 21],
+    [4, 3],
+    [5, 21],
+    [6, 5],
+    [7, 6],
+    [8, 7],
+    [9, 21],
+    [10, 9],
+    [11, 10],
+    [12, 11],
+    [13, 1],
+    [14, 13],
+    [15, 14],
+    [16, 15],
+    [17, 1],
+    [18, 17],
+    [19, 18],
+    [20, 19],
+    [22, 23],
+    [23, 8],
+    [24, 25],
+    [25, 12],
+]
+
+
+class BatchData(Data):
+    def __cat_dim__(self, key, value, *args, **kwargs):
+        if key == "x":
+            return None
+        else:
+            return super().__cat_dim__(key, value, *args, **kwargs)
 
 
 class NTU60(Dataset):
@@ -115,8 +152,6 @@ class NTU60(Dataset):
         if self.check_zip(ntu60_file_path, "nturgb+d_skeletons/"):
             extract_zip(ntu60_file_path, self.raw_dir)
 
-        return
-
     def check_zip(self, zip_path, at=""):
         zipfile_path = zipfile.Path(zip_path, at)
         for path in zipfile_path.iterdir():
@@ -127,39 +162,7 @@ class NTU60(Dataset):
     def process(self):
         self.extract()
 
-        self.edge_index = (
-            torch.tensor(
-                [
-                    [1, 2],
-                    [2, 21],
-                    [3, 21],
-                    [4, 3],
-                    [5, 21],
-                    [6, 5],
-                    [7, 6],
-                    [8, 7],
-                    [9, 21],
-                    [10, 9],
-                    [11, 10],
-                    [12, 11],
-                    [13, 1],
-                    [14, 13],
-                    [15, 14],
-                    [16, 15],
-                    [17, 1],
-                    [18, 17],
-                    [19, 18],
-                    [20, 19],
-                    [22, 23],
-                    [23, 8],
-                    [24, 25],
-                    [25, 12],
-                ],
-                dtype=torch.long,
-            )
-            .t()
-            .contiguous()
-        )
+        self.edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
 
         file_list = []
         for filename in os.listdir(self.extract_dir):
@@ -226,177 +229,47 @@ class NTU60(Dataset):
                     if "depth_2d" in self.joint_type:
                         joint_feature.extend(joint.to_depth_2d())
 
-                    joints.append(torch.tensor(joint_feature, dtype=torch.float16))
+                    joints.append(torch.tensor(joint_feature, dtype=torch.float32))
 
                 skeletons[skeleton.body_id] = torch.stack(joints, dim=0)
 
             raw_frames.append(skeletons)
 
-        body_ids = self.extract_body_ids(raw_frames)
-        num_bodies = len(body_ids)
-
-        if num_bodies == 0:
+        bodies = Bodies.from_list(raw_frames)
+        bodies = self.filter_bodies(bodies)
+        if bodies is None:
             return None
 
-        if num_bodies <= self.max_bodies:
-            frames = raw_frames
-            x = self.pad_frames(raw_frames)
-
-        if num_bodies > self.max_bodies:
-            raw_bodies = self.group_by_bodies(raw_frames)
-            num_bodies = len(raw_bodies.keys())
-            if num_bodies == 0:
-                return None
-
-            # denoise based on frame length
-            bodies = self.filter_by_length(raw_bodies, self.length_threshold)
-            num_bodies = len(bodies.keys())
-            if num_bodies == 0:
-                return None
-
-            # denoise based on spread
-            bodies = self.filter_by_spread(bodies, self.spread_threshold)
-            num_bodies = len(bodies.keys())
-            if num_bodies == 0:
-                return None
-
-            # add motion data
-            frames = self.filter_by_motion(bodies)
-
-            body_ids = self.extract_body_ids(frames)
-            num_bodies = len(body_ids)
-            if num_bodies == 0:
-                return None
-
-            x = self.pad_frames(frames)
-
-        assert x.size(1) == self.max_bodies, breakpoint()
+        x = pad_frames(
+            bodies.to_list(), self.max_bodies, self.num_joints, self.num_features
+        )
 
         return Data(x=x, edge_index=self.edge_index, y=label)
 
-    def group_by_bodies(self, raw_frames):
-        body_ids = self.extract_body_ids(raw_frames)
+    def filter_bodies(self, bodies: Bodies):
+        if bodies.num_bodies == 0:
+            return None
 
-        bodies = {body_id: {"frames": [], "indices": []} for body_id in body_ids}
-        for body_id in body_ids:
-            frames = []
-            indices = []
-            for i, raw_frame in enumerate(raw_frames):
-                if body_id in raw_frame.keys():
-                    frames.append(raw_frame[body_id])
-                    indices.append(i)
-
-            bodies[body_id] = {
-                "frames": torch.stack(frames, dim=0),
-                "indices": torch.tensor(indices),
-            }
-
-        return bodies
-
-    def ungroup_to_frames(self, bodies):
-        max_length = 0
-        for body_id, body in bodies.items():
-            max_length = max(max_length, max(body["indices"]))
-
-        ungrouped_frames = []
-        for i in range(max_length):
-            frame = {}
-            for body_id, body in bodies.items():
-                frames = body["frames"]
-                indices = body["indices"]
-
-                if i in indices:
-                    frame[body_id] = frames[indices == i]
-
-            ungrouped_frames.append(frame)
-
-        return ungrouped_frames
-
-    def extract_body_ids(self, frames):
-        body_ids = set()
-        for frame in frames:
-            for body_id in frame.keys():
-                body_ids.add(body_id)
-
-        return body_ids
-
-    def pad_frames(self, raw_frames):
-        body_ids = self.extract_body_ids(raw_frames)
-
-        frames = []
-        for frame in raw_frames:
-            skeletons = torch.zeros(
-                self.max_bodies, self.num_joints, self.num_features
-            ).float()
-
-            for i, body_id in enumerate(body_ids):
-                if body_id in frame.keys():
-                    skeletons[i] = frame[body_id]
-
-            frames.append(skeletons)
-
-        frames = torch.stack(frames, dim=0)
-        return frames
-
-    def filter_by_length(self, bodies, threshold):
-        if len(bodies.keys()) <= self.max_bodies:
+        if bodies.num_bodies <= self.max_bodies:
             return bodies
 
-        body_ids = list(bodies.keys())
-        for body_id in body_ids:
-            length = bodies[body_id]["indices"].size(0)
+        if bodies.num_bodies > self.max_bodies:
+            bodies = filter_by_length(bodies, self.length_threshold)
 
-            if length <= threshold:
-                del bodies[body_id]
+            if bodies.num_bodies == 0:
+                return None
 
-        return bodies
+            bodies = filter_by_spread(bodies, self.spread_threshold)
 
-    def filter_by_spread(self, bodies, threshold):
-        if len(bodies.keys()) <= self.max_bodies:
+            if bodies.num_bodies == 0:
+                return None
+
+            if bodies.num_bodies > self.max_bodies:
+                bodies = filter_by_motion(bodies, self.max_bodies)
+
+            assert bodies.num_bodies <= self.max_bodies, print(bodies, self.max_bodies)
+
             return bodies
-
-        body_ids = list(bodies.keys())
-        for body_id in body_ids:
-            frames = bodies[body_id]["frames"]
-
-            max_xy = frames[:, :, 0:2].max(dim=-1).values
-            min_xy = frames[:, :, 0:2].min(dim=-1).values
-
-            x = max_xy[:, 0] - min_xy[:, 0]
-            y = max_xy[:, 1] - min_xy[:, 1]
-
-            mask = x <= threshold * y
-            ratio = mask.float().mean().cpu().item()
-
-            if ratio < threshold:
-                del bodies[body_id]
-
-        return bodies
-
-    def filter_by_motion(self, bodies):
-        frames = self.ungroup_to_frames(bodies)
-
-        if len(bodies.keys()) <= self.max_bodies:
-            return frames
-
-        motion = {}
-        for body_id in bodies.keys():
-            motion[body_id] = torch.sum(torch.var(bodies[body_id]["frames"], dim=0))
-
-        motion = torch.stack(list(motion.values()), dim=0)
-        sorted_motion = motion.sort(descending=True)
-
-        body_ids = list(bodies.keys())
-        indices = sorted_motion.indices[: self.max_bodies]
-        body_ids = [body_ids[i] for i in indices]
-
-        for i, frame in enumerate(frames):
-            frame_body_ids = list(frame.keys())
-            for frame_body_id in frame_body_ids:
-                if frame_body_id not in body_ids:
-                    del frames[i][frame_body_id]
-
-        return frames
 
     def len(self):
         return len(self.data_list)
@@ -428,10 +301,9 @@ class NTU120(NTU60):
         super().extract()
 
         ntu120_file_path = osp.join(self.raw_dir, self.raw_file_names[1])
-        extract_zip(ntu120_file_path, self.extract_dir)
 
         if self.check_zip(ntu120_file_path):
-            extract_zip(ntu120_file_path, self.raw_dir)
+            extract_zip(ntu120_file_path, self.extract_dir)
 
     def process(self):
         super().process()
@@ -515,122 +387,3 @@ def download_rose_url(s, url, dst):
                 fout.write(chunk)
 
         return file_name
-
-
-@dataclass
-class Joint:
-    x: float
-    y: float
-    z: float
-    depth_x: float
-    depth_y: float
-    color_x: float
-    color_y: float
-    orientation_w: float
-    orientation_x: float
-    orientation_y: float
-    orientation_z: float
-    tracking_state: int
-
-    def __init__(self, line):
-        (
-            x,
-            y,
-            z,
-            depth_x,
-            depth_y,
-            color_x,
-            color_y,
-            orientation_w,
-            orientation_x,
-            orientation_y,
-            orientation_z,
-            tracking_state,
-        ) = line.split()
-
-        self.x = float(x)
-        self.y = float(y)
-        self.z = float(z)
-        self.depth_x = float(depth_x)
-        self.depth_y = float(depth_y)
-        self.color_x = float(color_x)
-        self.color_y = float(color_y)
-        self.orientation_w = float(orientation_w)
-        self.orientation_x = float(orientation_x)
-        self.orientation_y = float(orientation_y)
-        self.orientation_z = float(orientation_z)
-        self.tracking_state = int(tracking_state)
-
-    def to_3d(self):
-        return [self.x, self.y, self.z]
-
-    def to_color_2d(self):
-        return [self.color_x, self.color_y]
-
-    def to_depth_2d(self):
-        return [self.depth_x, self.depth_y]
-
-
-@dataclass
-class Skeleton:
-    body_id: str
-    clipped_edges: int
-    left_hand_confidence: int
-    left_hand_state: int
-    right_hand_confidence: int
-    right_hand_state: int
-    restricted: int
-    lean_x: float
-    lean_y: float
-    tracking_state: int
-    num_joints: int
-    joints: List[Joint]
-
-    def __init__(self, lines):
-        (
-            body_id,
-            clipped_edges,
-            left_hand_confidence,
-            left_hand_state,
-            right_hand_confidence,
-            right_hand_state,
-            restricted,
-            lean_x,
-            lean_y,
-            tracking_state,
-        ) = lines.pop(0).split()
-
-        self.body_id = body_id
-        self.clipped_edges = int(clipped_edges)
-        self.left_hand_confidence = int(left_hand_confidence)
-        self.left_hand_state = int(left_hand_state)
-        self.right_hand_confidence = int(right_hand_confidence)
-        self.right_hand_state = int(right_hand_state)
-        self.restricted = int(restricted)
-        self.lean_x = float(lean_x)
-        self.lean_y = float(lean_y)
-        self.tracking_state = int(tracking_state)
-
-        self.num_joints = int(lines.pop(0))
-
-        self.joints = [Joint(lines.pop(0)) for _ in range(self.num_joints)]
-
-
-@dataclass
-class Frame:
-    num_skeletons: int
-    skeletons: List[Skeleton]
-
-    def __init__(self, lines):
-        self.num_skeletons = int(lines.pop(0))
-        self.skeletons = [Skeleton(lines) for _ in range(self.num_skeletons)]
-
-
-@dataclass
-class SkeletonSequence:
-    num_frames: int
-    frames: List[Frame]
-
-    def __init__(self, lines):
-        self.num_frames = int(lines.pop(0))
-        self.frames = [Frame(lines) for _ in range(self.num_frames)]
