@@ -13,7 +13,7 @@ class NTU60DataModule(LightningDataModule):
         self,
         batch_size: int,
         data_dir: str,
-        benchmark: str = "xsub",
+        benchmark_type: str = "xsub",
         joint_type: Union[List[str], str] = "3d",
         max_bodies: int = 2,
         length: int = 30,
@@ -29,11 +29,18 @@ class NTU60DataModule(LightningDataModule):
         self.train_transform = transforms.SampleFrames(length)
         self.val_transform = transforms.SampleFrames(length)
 
+    @property
+    def num_features(self) -> int:
+        if self.hparams.joint_type == "3d":
+            return 3
+        else:
+            return 2
+
     def setup(self, stage: Optional[str] = None):
         if stage == "fit" or stage is None:
             self.train_set = NTU60(
                 root=self.hparams.data_dir,
-                benchmark=self.hparams.benchmark,
+                benchmark=self.hparams.benchmark_type,
                 split="train",
                 joint_type=self.hparams.joint_type,
                 max_bodies=self.hparams.max_bodies,
@@ -42,7 +49,7 @@ class NTU60DataModule(LightningDataModule):
             )
             self.val_set = NTU60(
                 root=self.hparams.data_dir,
-                benchmark=self.hparams.benchmark,
+                benchmark=self.hparams.benchmark_type,
                 split="train",
                 joint_type=self.hparams.joint_type,
                 max_bodies=self.hparams.max_bodies,
@@ -75,25 +82,6 @@ class NTU60DataModule(LightningDataModule):
             pin_memory=True,
             batch_size=self.hparams.batch_size,
         )
-
-    @classmethod
-    def add_data_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group("NTU60")
-
-        parser.add_argument("--data_dir", type=str, default="data")
-
-        parser.add_argument("--benchmark", type=str, default="xsub")
-        parser.add_argument("--joint_type", type=str, default="3d")
-        parser.add_argument("--max_bodies", type=int, default=2)
-        parser.add_argument("--length", type=int, default=30)
-
-        parser.add_argument("--length_threshold", type=int, default=11)
-        parser.add_argument("--spread_threshold", type=float, default=0.8)
-
-        parser.add_argument("--download", type=bool, action="store_true", default=False)
-
-        parser.add_argument("--batch_size", type=int, default=128)
-        parser.add_argument("--num_workers", type=int, default=0)
 
 
 class NTU120DataModule(LightningDataModule):
@@ -164,22 +152,22 @@ class NTU120DataModule(LightningDataModule):
             batch_size=self.hparams.eval_batch_size,
         )
 
-    @classmethod
-    def add_data_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group("NTU120")
 
-        parser.add_argument("--data_dir", type=str, default="data")
+def add_data_specific_args(parent_parser):
+    parser = parent_parser.add_argument_group("NTU120")
 
-        parser.add_argument("--benchmark", type=str, default="xsub")
-        parser.add_argument("--joint_type", type=str, default="3d")
-        parser.add_argument("--max_bodies", type=int, default=2)
-        parser.add_argument("--length", type=int, default=30)
+    parser.add_argument("--data_dir", type=str, default=".")
 
-        parser.add_argument("--length_threshold", type=int, default=11)
-        parser.add_argument("--spread_threshold", type=float, default=0.8)
+    parser.add_argument("--benchmark_type", type=str, default="xsub")
+    parser.add_argument("--joint_type", type=str, default="3d")
+    parser.add_argument("--max_bodies", type=int, default=2)
+    parser.add_argument("--length", type=int, default=30)
 
-        parser.add_argument("--download", type=bool, action="store_true", default=False)
+    parser.add_argument("--length_threshold", type=int, default=11)
+    parser.add_argument("--spread_threshold", type=float, default=0.8)
 
-        parser.add_argument("--batch_size", type=int, default=128)
-        parser.add_argument("--eval_batch_size", type=int, default=512)
-        parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--download", action="store_true")
+
+    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--eval_batch_size", type=int, default=512)
+    parser.add_argument("--num_workers", type=int, default=0)

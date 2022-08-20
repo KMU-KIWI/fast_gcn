@@ -23,11 +23,11 @@ def train(args):
     elif args.dataset == "ntu120":
         data = dm.NTU120DataModule(**dict_args)
 
-    model = LitSGN(**dict_args)
+    model = LitSGN(num_features=data.num_features, **dict_args)
 
     wandb_logger = WandbLogger(
-        name=f"{args.model_name}_{args.data}_{args.input_size}",
-        project="fer_small_inputs",
+        name=f"{args.dataset}_{args.benchmark_type}_{args.joint_type}",
+        project="small_sgn",
         save_dir=None,
         log_model=True,
     )
@@ -45,8 +45,9 @@ def train(args):
 
     trainer = pl.Trainer.from_argparse_args(
         args,
-        gpus=1,
-        precision=16,
+        # devices=1,
+        # accelerator="gpu",
+        # precision=16,
         callbacks=[
             RichModelSummary(),
             RichProgressBar(),
@@ -65,6 +66,8 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
+    parser.add_argument("--dataset", type=str, default="ntu60")
 
     LitSGN.add_model_specific_args(parser)
 

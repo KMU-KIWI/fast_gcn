@@ -13,12 +13,14 @@ class LitSGN(pl.LightningModule):
         self,
         num_classes: int = 60,
         length: int = 30,
-        bias: bool = True,
+        num_joints: int = 25,
+        num_features: int = 3,
+        **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters()
 
-        self.model = SGN(num_classes, length, bias)
+        self.model = SGN(num_classes, length, num_joints, num_features)
 
         self.loss = CrossEntropyLoss()
 
@@ -61,14 +63,14 @@ class LitSGN(pl.LightningModule):
 
         return {"optimizer": optimizer, "lr_scheduler": lr_scheduler}
 
-    def _compute_loss(self, img, labels):
-        logits = self.model(img)
+    def _compute_loss(self, x, labels):
+        logits = self.model(x)
         loss = self.loss(logits, labels)
         return loss, logits
 
     def _step(self, batch, stage: str):
-        img, labels = batch
-        loss, logits = self._compute_loss(img, labels)
+        x, edge_index, labels = batch
+        loss, logits = self._compute_loss(x, labels)
 
         self.log(f"{stage}_loss", loss)
         if stage == "train":
@@ -109,7 +111,7 @@ class LitSGN(pl.LightningModule):
         elif stage == "test":
             class_acc = self.test_class_metric.compute()
         for i, acc in enumerate(class_acc.tolist()):
-            self.log(f"{stage}_{self.label_map[i]}_acc", acc)
+            self.log(f"{stage}_{i}_acc", acc)
 
         if stage == "train":
             self.train_metric.reset()
