@@ -45,9 +45,9 @@ def train(args):
 
     trainer = pl.Trainer.from_argparse_args(
         args,
-        # devices=1,
-        # accelerator="gpu",
-        # precision=16,
+        devices=1,
+        accelerator="gpu",
+        precision=16,
         callbacks=[
             RichModelSummary(),
             RichProgressBar(),
