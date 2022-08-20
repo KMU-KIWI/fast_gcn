@@ -3,16 +3,17 @@ import os.path as osp
 
 from typing import List, Union
 
-import zipfile
-
 from multiprocessing import Pool
 
 import torch
+from torch.utils.data import Dataset
 
-from torch_geometric.data import Dataset, Data, extract_zip
+from torch_geometric.data import Data, extract_zip, makedirs
 
-from ._dataclasses import SkeletonSequence, Bodies
-from .functions import filter_by_length, filter_by_spread, filter_by_motion, pad_frames
+from .utils import zip_extracted
+from .utils import SkeletonSequence, Bodies
+
+from .filters import filter_by_length, filter_by_spread, filter_by_motion, pad_frames
 
 
 edge_index = [
@@ -43,15 +44,7 @@ edge_index = [
 ]
 
 
-class BatchData(Data):
-    def __cat_dim__(self, key, value, *args, **kwargs):
-        if key == "x":
-            return None
-        else:
-            return super().__cat_dim__(key, value, *args, **kwargs)
-
-
-class NTU60(Dataset):
+class NTU(Dataset):
     train_subjects = [
         int(c)
         for c in (
@@ -70,8 +63,6 @@ class NTU60(Dataset):
 
     train_cameras = [2, 3]
 
-    urls = ["https://rose1.ntu.edu.sg/dataset/actionRecognition/download/157"]
-
     def __init__(
         self,
         root,
@@ -81,11 +72,17 @@ class NTU60(Dataset):
         max_bodies: int = 2,
         length_threshold: int = 11,
         spread_threshold: float = 0.8,
+        download: bool = False,
         transform=None,
         pre_transform=None,
         pre_filter=None,
-        debug=False,
     ):
+        super().__init__()
+
+        self.transform = transform
+        self.pre_transform = pre_transform
+        self.pre_filter = pre_filter
+
         self.root = root
         self.benchmark = benchmark
         self.split = split
@@ -96,84 +93,60 @@ class NTU60(Dataset):
         self.length_threshold = length_threshold
         self.spread_threshold = spread_threshold
 
-        self.debug = debug
+        if download:
+            self.download()
+            self.extract()
 
-        super().__init__(root, transform, pre_transform, pre_filter)
-        self.data_list = torch.load(self.processed_paths[0])
-
-    @property
-    def num_joints(self) -> int:
-        return 25
-
-    @property
-    def num_features(self) -> int:
-        if self.joint_type == "3d":
-            return 3
+        if not osp.exists(self.processed_file_paths[0]):
+            self.data_list = self.process(root)
+            if not osp.exists(self.processed_dir):
+                makedirs(self.processed_dir)
+            torch.save(self.data_list, self.processed_file_paths[0])
         else:
-            return 2
+
+            self.data_list = torch.load(self.processed_file_paths[0])
 
     @property
-    def raw_file_names(self) -> List[str]:
-        return ["nturgbd_skeletons_s001_to_s017.zip"]
-
-    @property
-    def raw_dir(self) -> str:
-        return osp.join(self.root, "NTURGBD", "raw")
-
-    @property
-    def extract_dir(self) -> str:
-        return osp.join(self.raw_dir, "nturgb+d_skeletons")
-
-    @property
-    def processed_dir(self) -> str:
-        return osp.join(
-            self.root,
-            "NTURGBD",
-            "processed",
-            f"ntu60_{self.benchmark}_{self.joint_type}_{self.max_bodies}_{self.split}",
-        )
-
-    @property
-    def processed_file_names(self):
-        return ["data.pt"]
+    def urls(self) -> List[str]:
+        raise NotImplementedError
 
     def download(self):
         session = None
         for url, file_name in zip(self.urls, self.raw_file_names):
-            if not osp.exists(osp.join(self.raw_dir, file_name)):
+            if not osp.exists(osp.join(self.root, file_name)):
                 if session is None:
                     session = login_rose()
 
-                download_rose_url(session, url, self.raw_dir)
+                download_rose_url(session, url, self.root)
 
-    def extract(self):
-        ntu60_file_path = osp.join(self.raw_dir, self.raw_file_names[0])
+    @property
+    def base_dir(self) -> str:
+        return osp.join(self.root, "NTU")
 
-        if self.check_zip(ntu60_file_path, "nturgb+d_skeletons/"):
-            extract_zip(ntu60_file_path, self.raw_dir)
+    @property
+    def processed_dir(self) -> str:
+        raise NotImplementedError
 
-    def check_zip(self, zip_path, at=""):
-        zipfile_path = zipfile.Path(zip_path, at)
-        for path in zipfile_path.iterdir():
-            if osp.exists(osp.join(self.extract_dir, path.name)) is False:
-                return True
-        return False
+    @property
+    def processed_file_paths(self) -> List[str]:
+        return [osp.join(self.processed_dir, "data.pt")]
 
-    def process(self):
-        self.extract()
+    @property
+    def raw_dir(self) -> str:
+        return osp.join(self.base_dir, "skeletons")
 
-        self.edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-
-        file_list = []
-        for filename in os.listdir(self.extract_dir):
-            if filename.split(".")[-1] != "skeleton":
+    @property
+    def raw_file_paths(self) -> List[str]:
+        raw_file_paths = []
+        for name in os.listdir(self.raw_dir):
+            if name.split(".")[-1] != "skeleton":
                 continue
 
             if self.benchmark == "xsub":
-                eval_id = int(filename[9:12])
+                eval_id = int(name[9:12])
                 train_group = self.train_subjects
             if self.benchmark == "xview":
-                eval_id = int(filename[5:8])
+                eval_id = int(name[5:8])
                 train_group = self.train_cameras
 
             if eval_id in train_group:
@@ -182,26 +155,30 @@ class NTU60(Dataset):
                 curr_split = "val"
 
             if curr_split == self.split:
-                file_list.append(osp.join(self.extract_dir, filename))
+                raw_file_paths.append(osp.join(self.raw_dir, name))
 
-        if self.debug:
-            data_list_with_nones = map(self.process_path, file_list)
-        else:
-            with Pool(os.cpu_count()) as p:
-                data_list_with_nones = p.map(self.process_path, file_list)
+        return raw_file_paths
 
-        data_list = []
-        for data in data_list_with_nones:
-            if data is not None:
+    def process(self, root):
+        self.edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+
+        with Pool(os.cpu_count()) as p:
+            raw_data_list = p.imap_unordered(self.process_path, self.raw_file_paths)
+
+            data_list = []
+            for data in raw_data_list:
+                if not data:
+                    continue
+
+                if self.pre_filter is not None and not self.pre_filter(data):
+                    continue
+
+                if self.pre_transform is not None:
+                    data = self.pre_transform(data)
+
                 data_list.append(data)
 
-        if self.pre_filter is not None:
-            data_list = [data for data in data_list if self.pre_filter(data)]
-
-        if self.pre_transform is not None:
-            data_list = [self.pre_transform(data) for data in data_list]
-
-        torch.save(data_list, self.processed_paths[0])
+            return data_list
 
     def process_path(self, path):
         with open(path, "r") as f:
@@ -237,18 +214,17 @@ class NTU60(Dataset):
 
         bodies = Bodies.from_list(raw_frames)
         bodies = self.filter_bodies(bodies)
-        if bodies is None:
-            return None
+        if not bodies:
+            return False
 
-        x = pad_frames(
-            bodies.to_list(), self.max_bodies, self.num_joints, self.num_features
-        )
+        T, J, C = bodies.frames[bodies.body_ids[0]].size()
+        x = pad_frames(bodies.to_list(), self.max_bodies, J, C)
 
         return Data(x=x, edge_index=self.edge_index, y=label)
 
     def filter_bodies(self, bodies: Bodies):
         if bodies.num_bodies == 0:
-            return None
+            return False
 
         if bodies.num_bodies <= self.max_bodies:
             return bodies
@@ -257,12 +233,12 @@ class NTU60(Dataset):
             bodies = filter_by_length(bodies, self.length_threshold)
 
             if bodies.num_bodies == 0:
-                return None
+                return False
 
             bodies = filter_by_spread(bodies, self.spread_threshold)
 
             if bodies.num_bodies == 0:
-                return None
+                return False
 
             if bodies.num_bodies > self.max_bodies:
                 bodies = filter_by_motion(bodies, self.max_bodies)
@@ -271,24 +247,50 @@ class NTU60(Dataset):
 
             return bodies
 
-    def len(self):
+    def __len__(self):
         return len(self.data_list)
 
-    def get(self, idx):
-        return self.data_list[idx]
+    def __getitem__(self, idx):
+        data = self.data_list[idx]
+
+        if self.transform is not None:
+            data = self.transform(data)
+
+        return data.x, data.edge_index, data.y
 
 
-class NTU120(NTU60):
-    urls = [
-        "https://rose1.ntu.edu.sg/dataset/actionRecognition/download/157",
-        "https://rose1.ntu.edu.sg/dataset/actionRecognition/download/158",
-    ]
+class NTU60(NTU):
+    @property
+    def urls(self) -> List[str]:
+        return ["https://rose1.ntu.edu.sg/dataset/actionRecognition/download/157"]
+
+    @property
+    def raw_file_names(self) -> List[str]:
+        return ["nturgbd_skeletons_s001_to_s017.zip"]
 
     @property
     def processed_dir(self) -> str:
         return osp.join(
-            self.root, "NTURGBD", "processed", f"ntu120_{self.benchmark}_{self.split}"
+            self.base_dir,
+            f"ntu120_{self.benchmark}_{self.split}_{self.joint_type}_{self.max_bodies}bodies",
         )
+
+    def extract(self):
+        ntu60_file_path = osp.join(self.root, "nturgbd_skeletons_s001_to_s017.zip")
+
+        internal_dir = "nturgb+d_skeletons/"
+        if not zip_extracted(self.raw_dir, ntu60_file_path, internal_dir):
+            extract_zip(ntu60_file_path, self.base_dir)
+            os.rename(osp.join(self.base_dir, internal_dir), self.raw_dir)
+
+
+class NTU120(NTU):
+    @property
+    def urls(self) -> List[str]:
+        return [
+            "https://rose1.ntu.edu.sg/dataset/actionRecognition/download/157",
+            "https://rose1.ntu.edu.sg/dataset/actionRecognition/download/158",
+        ]
 
     @property
     def raw_file_names(self) -> List[str]:
@@ -297,16 +299,24 @@ class NTU120(NTU60):
             "nturgbd_skeletons_s018_to_s032.zip",
         ]
 
+    @property
+    def processed_dir(self) -> str:
+        return osp.join(
+            self.base_dir,
+            f"ntu120_{self.benchmark}_{self.split}_{self.joint_type}_{self.max_bodies}bodies",
+        )
+
     def extract(self):
-        super().extract()
+        ntu60_file_path = osp.join(self.root, "nturgbd_skeletons_s001_to_s017.zip")
+        ntu120_file_path = osp.join(self.root, "nturgbd_skeletons_s018_to_s032.zip")
 
-        ntu120_file_path = osp.join(self.raw_dir, self.raw_file_names[1])
+        internal_dir = "nturgb+d_skeletons/"
+        if not zip_extracted(self.raw_dir, ntu60_file_path, internal_dir):
+            extract_zip(ntu60_file_path, self.base_dir)
+            os.rename(osp.join(self.base_dir, internal_dir), self.raw_dir)
 
-        if self.check_zip(ntu120_file_path):
-            extract_zip(ntu120_file_path, self.extract_dir)
-
-    def process(self):
-        super().process()
+        if not zip_extracted(self.raw_dir, ntu120_file_path):
+            extract_zip(ntu60_file_path, osp.join(self.raw_dir, "nturgb+d_skeletons"))
 
 
 def login_rose():

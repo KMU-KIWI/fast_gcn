@@ -2,17 +2,17 @@ import pytest
 
 import os
 
-from torch_geometric.loader import DataLoader
+from torch.utils.data import DataLoader
 
 from fast_gcn.data import NTU60, NTU120
 from fast_gcn.transforms import SampleFrames
 
 
 @pytest.mark.parametrize("benchmark", ["xsub", "xview"])
-@pytest.mark.parametrize("split", ["train", "val"])
+@pytest.mark.parametrize("split", ["val", "train"])
 @pytest.mark.parametrize("joint_type", ["3d", "color_2d", "depth_2d"])
 @pytest.mark.parametrize("max_bodies", [1, 5])
-def test_ntu60(ntu_path, single_thread, benchmark, split, joint_type, max_bodies):
+def test_ntu60(ntu_path, benchmark, split, joint_type, max_bodies):
     transform = SampleFrames(length=100)
     dataset = NTU60(
         root=ntu_path,
@@ -21,15 +21,14 @@ def test_ntu60(ntu_path, single_thread, benchmark, split, joint_type, max_bodies
         joint_type=joint_type,
         max_bodies=max_bodies,
         transform=transform,
-        debug=single_thread,
+        download=True,
     )
 
-    data = dataset[0]
-    x = data.x
-    statement = x.size()[1:] == (max_bodies, 25, 3 if joint_type == "3d" else 2)
+    x, edge_index, y = dataset[0]
+    statement = x.size() == (100, max_bodies, 25, 3 if joint_type == "3d" else 2)
 
     if statement is False:
-        os.remove(dataset.processed_paths[0])
+        os.remove(dataset.processed_file_paths[0])
 
     assert statement
 
@@ -41,25 +40,24 @@ def test_ntu60(ntu_path, single_thread, benchmark, split, joint_type, max_bodies
         joint_type=joint_type,
         max_bodies=max_bodies,
         transform=transform,
-        debug=single_thread,
+        download=True,
     )
 
     dataloader = DataLoader(dataset, batch_size=4)
 
-    for data in dataloader:
+    for x, edge_index, y in dataloader:
         break
 
-    os.remove(dataset.processed_paths[0])
+    os.remove(dataset.processed_file_paths[0])
 
-    x = data.x
-    assert x.size()[1:] == (max_bodies, 25, 3 if joint_type == "3d" else 2)
+    assert x.size() == (4, 100, max_bodies, 25, 3 if joint_type == "3d" else 2)
 
 
 @pytest.mark.parametrize("benchmark", ["xsub", "xview"])
-@pytest.mark.parametrize("split", ["train", "val"])
+@pytest.mark.parametrize("split", ["val", "train"])
 @pytest.mark.parametrize("joint_type", ["3d", "color_2d", "depth_2d"])
 @pytest.mark.parametrize("max_bodies", [1, 5])
-def test_ntu120(ntu_path, single_thread, benchmark, split, joint_type, max_bodies):
+def test_ntu120(ntu_path, benchmark, split, joint_type, max_bodies):
     transform = SampleFrames(length=100)
     dataset = NTU120(
         root=ntu_path,
@@ -68,15 +66,14 @@ def test_ntu120(ntu_path, single_thread, benchmark, split, joint_type, max_bodie
         joint_type=joint_type,
         max_bodies=max_bodies,
         transform=transform,
-        debug=single_thread,
+        download=True,
     )
-    data = dataset[0]
+    x, edge_index, y = dataset[0]
 
-    x = data.x
-    statement = x.size()[1:] == (max_bodies, 25, 3 if joint_type == "3d" else 2)
+    statement = x.size() == (100, max_bodies, 25, 3 if joint_type == "3d" else 2)
 
     if statement is False:
-        os.remove(dataset.processed_paths[0])
+        os.remove(dataset.processed_file_paths[0])
 
     assert statement
 
@@ -87,15 +84,14 @@ def test_ntu120(ntu_path, single_thread, benchmark, split, joint_type, max_bodie
         joint_type=joint_type,
         max_bodies=max_bodies,
         transform=transform,
-        debug=single_thread,
+        download=True,
     )
 
     dataloader = DataLoader(dataset, batch_size=4)
 
-    for data in dataloader:
+    for x, edge_index, y in dataloader:
         break
 
-    os.remove(dataset.processed_paths[0])
+    os.remove(dataset.processed_file_paths[0])
 
-    x = data.x
-    assert x.size() == (4 * 100, max_bodies, 25, 3 if joint_type == "3d" else 2)
+    assert x.size() == (4, 100, max_bodies, 25, 3 if joint_type == "3d" else 2)

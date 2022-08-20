@@ -3,7 +3,7 @@ from typing import List, Dict
 import torch
 from torch import Tensor
 
-from ._dataclasses import Bodies
+from .utils import Bodies
 
 
 def filter_by_length(bodies: Bodies, threshold: int):
@@ -70,23 +70,3 @@ def pad_frames(
         frames[bodies.indices[body_id]] = bodies.frames[body_id]
 
     return frames
-
-
-def sample_frames(x: Tensor, length: int):
-    T, M, J, C = x.size()
-    if T < length:
-        sampled_frames = torch.zeros(length, M, J, C).float()
-
-        sampled_frames[:T] = x
-
-        return sampled_frames
-    else:
-        chunks = x.split(T // length)
-
-        sampled_frames = []
-        for chunk in chunks:
-            chunk_length = chunk.size(0)
-            index = torch.randint(chunk_length, (1,))
-            sampled_frames.append(chunk[index])
-
-        return torch.cat(sampled_frames, dim=0)

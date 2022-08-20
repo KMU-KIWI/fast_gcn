@@ -2,7 +2,7 @@ import pytest
 
 import torch
 
-from fast_gcn.data._dataclasses import Bodies
+from fast_gcn.data.utils import Bodies
 
 
 J = 25

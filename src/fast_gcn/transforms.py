@@ -1,6 +1,6 @@
 from torch_geometric.transforms import BaseTransform
 
-from fast_gcn.data.functions import sample_frames
+from fast_gcn.data.samplers import sample_frames
 
 
 class SampleFrames(BaseTransform):

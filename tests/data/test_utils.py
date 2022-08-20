@@ -1,7 +1,7 @@
-from fast_gcn.data._dataclasses import *
+from fast_gcn.data.utils import Bodies
 
 
-def test_remove_bodies(bodies):
+def test_remove_bodies(bodies: Bodies):
     num_bodies = bodies.num_bodies
     body_ids = bodies.body_ids
 

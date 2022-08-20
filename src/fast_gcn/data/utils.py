@@ -1,9 +1,11 @@
-from dataclasses import dataclass, field
-
-from typing import List, Dict
+import os.path as osp
+import zipfile
 
 import torch
 from torch import Tensor
+
+from typing import List, Dict
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -197,3 +199,11 @@ class Bodies:
             max_length = max(max_length, max(self.indices[body_id]) + 1)
 
         return max_length
+
+
+def zip_extracted(search_root: str, zip_path: str, at: str = ""):
+    zipfile_path = zipfile.Path(zip_path, at)
+    for path in zipfile_path.iterdir():
+        if osp.exists(osp.join(search_root, path.name)) is False:
+            return False
+    return True
