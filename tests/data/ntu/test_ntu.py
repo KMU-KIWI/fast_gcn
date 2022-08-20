@@ -11,7 +11,7 @@ from fast_gcn.transforms import SampleFrames
 @pytest.mark.parametrize("benchmark", ["xsub", "xview"])
 @pytest.mark.parametrize("split", ["val", "train"])
 @pytest.mark.parametrize("joint_type", ["3d", "color_2d", "depth_2d"])
-@pytest.mark.parametrize("max_bodies", [1, 5])
+@pytest.mark.parametrize("max_bodies", [5, 1])
 def test_ntu60(ntu_path, benchmark, split, joint_type, max_bodies):
     transform = SampleFrames(length=100)
     dataset = NTU60(
@@ -56,7 +56,7 @@ def test_ntu60(ntu_path, benchmark, split, joint_type, max_bodies):
 @pytest.mark.parametrize("benchmark", ["xsub", "xview"])
 @pytest.mark.parametrize("split", ["val", "train"])
 @pytest.mark.parametrize("joint_type", ["3d", "color_2d", "depth_2d"])
-@pytest.mark.parametrize("max_bodies", [1, 5])
+@pytest.mark.parametrize("max_bodies", [5, 1])
 def test_ntu120(ntu_path, benchmark, split, joint_type, max_bodies):
     transform = SampleFrames(length=100)
     dataset = NTU120(

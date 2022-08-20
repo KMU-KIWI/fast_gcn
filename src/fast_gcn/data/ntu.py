@@ -72,7 +72,7 @@ class NTU(Dataset):
         max_bodies: int = 2,
         length_threshold: int = 11,
         spread_threshold: float = 0.8,
-        download: bool = False,
+        download: bool = True,
         transform=None,
         pre_transform=None,
         pre_filter=None,
@@ -96,6 +96,26 @@ class NTU(Dataset):
         if download:
             self.download()
             self.extract()
+
+        self.raw_file_paths = []
+        for name in os.listdir(self.raw_dir):
+            if name.split(".")[-1] != "skeleton":
+                continue
+
+            if self.benchmark == "xsub":
+                eval_id = int(name[9:12])
+                train_group = self.train_subjects
+            if self.benchmark == "xview":
+                eval_id = int(name[5:8])
+                train_group = self.train_cameras
+
+            if eval_id in train_group:
+                curr_split = "train"
+            else:
+                curr_split = "val"
+
+            if curr_split == self.split:
+                self.raw_file_paths.append(osp.join(self.raw_dir, name))
 
         if not osp.exists(self.processed_file_paths[0]):
             self.data_list = self.process(root)
@@ -135,50 +155,26 @@ class NTU(Dataset):
     def raw_dir(self) -> str:
         return osp.join(self.base_dir, "skeletons")
 
-    @property
-    def raw_file_paths(self) -> List[str]:
-        raw_file_paths = []
-        for name in os.listdir(self.raw_dir):
-            if name.split(".")[-1] != "skeleton":
-                continue
-
-            if self.benchmark == "xsub":
-                eval_id = int(name[9:12])
-                train_group = self.train_subjects
-            if self.benchmark == "xview":
-                eval_id = int(name[5:8])
-                train_group = self.train_cameras
-
-            if eval_id in train_group:
-                curr_split = "train"
-            else:
-                curr_split = "val"
-
-            if curr_split == self.split:
-                raw_file_paths.append(osp.join(self.raw_dir, name))
-
-        return raw_file_paths
-
     def process(self, root):
         self.edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
 
-        with Pool(os.cpu_count()) as p:
-            raw_data_list = p.imap_unordered(self.process_path, self.raw_file_paths)
+        # with Pool(os.cpu_count()) as p:
+        raw_data_list = map(self.process_path, self.raw_file_paths)
 
-            data_list = []
-            for data in raw_data_list:
-                if not data:
-                    continue
+        data_list = []
+        for data in raw_data_list:
+            if not data:
+                continue
 
-                if self.pre_filter is not None and not self.pre_filter(data):
-                    continue
+            if self.pre_filter is not None and not self.pre_filter(data):
+                continue
 
-                if self.pre_transform is not None:
-                    data = self.pre_transform(data)
+            if self.pre_transform is not None:
+                data = self.pre_transform(data)
 
-                data_list.append(data)
+            data_list.append(data)
 
-            return data_list
+        return data_list
 
     def process_path(self, path):
         with open(path, "r") as f:
