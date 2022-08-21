@@ -23,16 +23,16 @@ class SGN(nn.Module):
         self.joint_level_module = JointLevelModule(num_joints, num_features)
         self.frame_level_module = FrameLevelModule(length)
 
-        self.fc = nn.Linear(512, num_classes)
+        self.fc = nn.Linear(256, num_classes)
 
     def forward(self, x):
         # x: N, T, M, V, C
         N, T, M, V, C = x.size()
         z = self.dynamics_representation(x)
         # z: N, T, M, V, C
-        z = self.joint_level_module(z)
-        # z: N, T, M, V, C
         z = self.frame_level_module(z)
+        # z: N, M, V, C
+        z = self.joint_level_module(z)
         # z: N, M, C
         z = z.mean(dim=1)
         # z: N, C
@@ -67,7 +67,7 @@ class JointLevelModule(nn.Module):
         super().__init__()
         joint_indices = torch.arange(0, num_joints)
         one_hot_joint = F.one_hot(joint_indices, num_classes=num_joints).float()
-        one_hot_joint = one_hot_joint.view(1, 1, 1, num_joints, num_joints)
+        one_hot_joint = one_hot_joint.view(1, 1, num_joints, num_joints)
         self.register_buffer("j", one_hot_joint)
 
         self.embed_joint = Embed([num_joints, 64, 64])
@@ -79,22 +79,29 @@ class JointLevelModule(nn.Module):
         self.gcn3 = self.build_gcn(256, 256)
 
     def forward(self, z):
-        # z: N, T, M, V, C
-        N, T, M, V, C = z.size()
-        z = torch.cat([z, self.embed_joint(self.j).repeat(N, T, M, 1, 1)], dim=-1)
+        # z: N, M, V, C
+        N, M, V, C = z.size()
+        z = torch.cat([z, self.embed_joint(self.j).repeat(N, M, 1, 1)], dim=-1)
 
-        # G: N, T, M, V, V
         G = self.compute_adjacency_matrix(z)
 
-        x = z.view(N * T * M, V, -1)
-        adj = G.view(N * T * M, V, V)
+        # G: N, M, V, V
+        adj = G.view(N * M, V, V)
 
+        x = z.view(N * M, V, -1)
         # x: N, V, C, adj: N, V, V
         x = self.gcn1(x, adj)
         x = self.gcn2(x, adj)
         x = self.gcn3(x, adj)
 
-        z = x.view(N, T, M, V, -1)
+        z = x.view(N, M, V, -1)
+
+        # z: N, M, V, C
+        z = z.max(dim=-2).values
+        # z: N, M, 1, C
+        z = z.squeeze(-2)  # spatial max pooling
+        # x: N, M, C
+
         return z
 
     def build_gcn(self, in_channels, out_channels):
@@ -119,19 +126,19 @@ class FrameLevelModule(nn.Module):
         one_hot_frame = one_hot_frame.view(1, length, 1, 1, length)
         self.register_buffer("f", one_hot_frame)
 
-        self.embed_frame = Embed([length, 64, 256])
+        self.embed_frame = Embed([length, 64, 64])
 
         self.tcn1 = nn.Sequential(
-            nn.Conv1d(256, 256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256),
+            nn.Conv1d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
         )
 
         self.drop_out = nn.Dropout(0.2)
 
         self.tcn2 = nn.Sequential(
-            nn.Conv1d(256, 512, kernel_size=1),
-            nn.BatchNorm1d(512),
+            nn.Conv1d(64, 64, kernel_size=1),
+            nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
         )
 
@@ -139,22 +146,21 @@ class FrameLevelModule(nn.Module):
         # z: N, T, M, V, C
         N, T, M, V, C = z.size()
         z = z + self.embed_frame(self.f)
-        z = z.max(dim=-2).values
-        z = z.squeeze(-2)  # spatial max pooling
 
-        # z: N, T, M, C
-        x = z.permute(0, 2, 3, 1).reshape(N * M, C, T)
-        # x: N, C, T
+        # z: N, T, M, V, C
+        x = z.permute(0, 2, 3, 4, 1).reshape(N * M * V, C, T)
+        # x: N, C, L
         x = self.tcn1(x)
         x = self.drop_out(x)
         x = self.tcn2(x)
 
         _, C, T = x.size()
         # x: N, C, T
-        x = x.view(N, M, C, T)
-        # x: N, M, T, C
-        z = x.max(dim=-1).values  # temporal max pooling
-        z = z.squeeze(-2)
+        x = x.view(N, M, V, C, T).permute(0, 4, 1, 2, 3).contiguous()
+        # x: N, T, M, V, C
+        z = x.max(dim=1).values  # temporal max pooling
+        z = z.squeeze(1)
+        # z: N, M, V, C
 
         return z
 
@@ -189,11 +195,11 @@ class AdjacencyMatrix(nn.Module):
         self.softmax = nn.Softmax(dim=-2)
 
     def forward(self, z):
-        # z: N, T, M, V, C
+        # z: N, M, V, C
         theta = self.theta(z)
         phi = self.phi(z)
 
-        S = torch.matmul(theta, phi.permute(0, 1, 2, 4, 3).contiguous())
+        S = torch.matmul(theta, phi.permute(0, 1, 3, 2).contiguous())
         G = self.softmax(S)
         return G
 

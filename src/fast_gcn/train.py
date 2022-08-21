@@ -1,7 +1,7 @@
 import argparse
 
-from fast_gcn.litmodules import LitSGN
-import fast_gcn.datamodules as dm
+import torch
+from thop import profile
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import (
@@ -13,6 +13,9 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import WandbLogger
 
 import wandb
+
+from fast_gcn.litmodules import LitSGN
+import fast_gcn.datamodules as dm
 
 
 def train(args):
@@ -54,6 +57,12 @@ def train(args):
         logger=wandb_logger,
         min_epochs=16,
     )
+
+    x = torch.randn(1, 30, 2, 25, 3)
+
+    macs, params = profile(model.model, inputs=(x,))
+
+    print(f"{macs / 1e9} GMACS  {params / 1e6}M params")
 
     trainer.fit(model, data)
 
