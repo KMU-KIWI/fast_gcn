@@ -250,13 +250,13 @@ class GCN(nn.Module):
 
         out = torch.matmul(adj, out)
 
+        out = out + self.lin2(x)
+
         if self.bias is not None:
             out = out + self.bias
 
         if mask is not None:
             out = out * mask.view(B, N, 1).to(x.dtype)
-
-        out = out + self.lin2(x) + self.bias
 
         return out
 
