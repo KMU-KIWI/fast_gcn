@@ -97,7 +97,8 @@ def main():
         best = np.Inf
         str_op = 'reduce'
 
-    scheduler = MultiStepLR(optimizer, milestones=[60, 90, 110], gamma=0.1)
+    #scheduler = MultiStepLR(optimizer, milestones=[60, 90, 110], gamma=0.1)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=0.001)
     # Data loading
     ntu_loaders = NTUDataLoaders(args.dataset, args.case, seg=args.seg)
     train_loader = ntu_loaders.get_train_loader(args.batch_size, args.workers)
@@ -202,6 +203,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         optimizer.step()
 
         if (i + 1) % args.print_freq == 0:
+            print(epoch, optimizer.param_groups[0]['lr'])
             print('Epoch-{:<3d} {:3d} batches\t'
                   'loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'accu {acc.val:.3f} ({acc.avg:.3f})'.format(
