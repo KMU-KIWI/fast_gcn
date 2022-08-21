@@ -1,6 +1,6 @@
 import pytorch_lightning as pl
 
-from torch.optim import AdamW
+from torch.optim import SGD
 from torch.optim.lr_scheduler import OneCycleLR
 from torch.nn import CrossEntropyLoss
 from torchmetrics import Accuracy
@@ -18,11 +18,12 @@ class LitSGN(pl.LightningModule):
         **kwargs,
     ):
         super().__init__()
+
         self.save_hyperparameters()
 
         self.model = SGN(num_classes, length, num_joints, num_features)
 
-        self.loss = CrossEntropyLoss()
+        self.loss = CrossEntropyLoss(label_smoothing=0.1)
 
         self.train_metric = Accuracy()
         self.val_metric = Accuracy()
@@ -33,10 +34,11 @@ class LitSGN(pl.LightningModule):
         self.test_class_metric = Accuracy(average="none", num_classes=num_classes)
 
     def configure_optimizers(self):
-        optimizer = AdamW(
+        optimizer = SGD(
             self.parameters(),
             lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay,
+            momentum=0.9,
         )
 
         grad_batches = self.trainer.accumulate_grad_batches
@@ -73,15 +75,17 @@ class LitSGN(pl.LightningModule):
         loss, logits = self._compute_loss(x, labels)
 
         self.log(f"{stage}_loss", loss)
+
+        preds = logits.argmax(dim=1)
         if stage == "train":
-            self.train_metric.update(logits, labels.int())
-            self.train_class_metric.update(logits, labels.int())
+            self.train_metric.update(preds, labels.int())
+            self.train_class_metric.update(preds, labels.int())
         elif stage == "val":
-            self.val_metric.update(logits, labels.int())
-            self.val_class_metric.update(logits, labels.int())
+            self.val_metric.update(preds, labels.int())
+            self.val_class_metric.update(preds, labels.int())
         elif stage == "test":
-            self.test_metric.update(logits, labels.int())
-            self.test_class_metric.update(logits, labels.int())
+            self.test_metric.update(preds, labels.int())
+            self.test_class_metric.update(preds, labels.int())
 
         return loss
 
@@ -135,7 +139,7 @@ class LitSGN(pl.LightningModule):
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group("LitClassifier")
-        parser.add_argument("--lr", type=float, default=5e-5)
+        parser.add_argument("--lr", type=float, default=0.1)
         parser.add_argument("--weight_decay", type=float, default=1e-8)
         parser.add_argument("--pct_start", type=float, default=0.0)
         parser.add_argument("--anneal_strategy", type=str, default="cos")

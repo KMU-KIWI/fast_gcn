@@ -2,7 +2,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-import torch_geometric.nn as geom_nn
+from torch_geometric.nn.dense.linear import Linear
+from torch_geometric.nn.inits import zeros
 from torch_geometric.nn import Sequential
 
 from typing import List
@@ -89,20 +90,20 @@ class JointLevelModule(nn.Module):
         adj = G.view(N * T * M, V, V)
 
         # x: N, V, C, adj: N, V, V
-        x = self.gcn1(x, adj, mask=None, add_loop=False)
-        x = self.gcn2(x, adj, mask=None, add_loop=False)
-        x = self.gcn3(x, adj, mask=None, add_loop=False)
+        x = self.gcn1(x, adj)
+        x = self.gcn2(x, adj)
+        x = self.gcn3(x, adj)
 
         z = x.view(N, T, M, V, -1)
         return z
 
     def build_gcn(self, in_channels, out_channels):
         return Sequential(
-            "x, adj, mask, add_loop",
+            "x, adj",
             [
                 (
-                    geom_nn.DenseGCNConv(in_channels, out_channels),
-                    "x, adj, mask, add_loop -> x",
+                    GCN(in_channels, out_channels),
+                    "x, adj -> x",
                 ),
                 GraphBatchNorm(out_channels),
                 nn.ReLU(inplace=True),
@@ -125,6 +126,9 @@ class FrameLevelModule(nn.Module):
             nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
         )
+
+        self.drop_out = nn.Dropout(0.2)
+
         self.tcn2 = nn.Sequential(
             nn.Conv1d(256, 512, kernel_size=1),
             nn.BatchNorm1d(512),
@@ -142,6 +146,7 @@ class FrameLevelModule(nn.Module):
         x = z.permute(0, 2, 3, 1).reshape(N * M, C, T)
         # x: N, C, T
         x = self.tcn1(x)
+        x = self.drop_out(x)
         x = self.tcn2(x)
 
         _, C, T = x.size()
@@ -206,3 +211,54 @@ class GraphBatchNorm(nn.Module):
         x = x.permute(0, 2, 1).contiguous()
         # x: N, V, C
         return x
+
+
+class GCN(nn.Module):
+    def __init__(self, in_channels, out_channels, improved=False, bias=True):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.improved = improved
+
+        self.lin1 = Linear(
+            in_channels, out_channels, bias=False, weight_initializer="glorot"
+        )
+
+        self.lin2 = Linear(
+            in_channels, out_channels, bias=False, weight_initializer="glorot"
+        )
+
+        if bias:
+            self.bias = nn.Parameter(torch.Tensor(out_channels))
+        else:
+            self.register_parameter("bias", None)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.lin1.reset_parameters()
+        self.lin2.reset_parameters()
+        zeros(self.bias)
+
+    def forward(self, x, adj, mask=None):
+        x = x.unsqueeze(0) if x.dim() == 2 else x
+        adj = adj.unsqueeze(0) if adj.dim() == 2 else adj
+        B, N, _ = adj.size()
+
+        out = self.lin1(x)
+
+        out = torch.matmul(adj, out)
+
+        if self.bias is not None:
+            out = out + self.bias
+
+        if mask is not None:
+            out = out * mask.view(B, N, 1).to(x.dtype)
+
+        out = out + self.lin2(x) + self.bias
+
+        return out
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({self.in_channels}, " f"{self.out_channels})"

@@ -118,13 +118,12 @@ class NTU(Dataset):
                 self.raw_file_paths.append(osp.join(self.raw_dir, name))
 
         if not osp.exists(self.processed_file_paths[0]):
-            self.data_list = self.process(root)
+            data_list = self.process(root)
             if not osp.exists(self.processed_dir):
                 makedirs(self.processed_dir)
-            torch.save(self.data_list, self.processed_file_paths[0])
-        else:
+            torch.save(data_list, self.processed_file_paths[0])
 
-            self.data_list = torch.load(self.processed_file_paths[0])
+        self.data_list = torch.load(self.processed_file_paths[0])
 
     @property
     def urls(self) -> List[str]:
@@ -158,8 +157,8 @@ class NTU(Dataset):
     def process(self, root):
         self.edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
 
-        # with Pool(os.cpu_count()) as p:
-        raw_data_list = map(self.process_path, self.raw_file_paths)
+        with Pool() as p:
+            raw_data_list = p.map(self.process_path, self.raw_file_paths)
 
         data_list = []
         for data in raw_data_list:
@@ -268,7 +267,7 @@ class NTU60(NTU):
     def processed_dir(self) -> str:
         return osp.join(
             self.base_dir,
-            f"ntu120_{self.benchmark}_{self.split}_{self.joint_type}_{self.max_bodies}bodies",
+            f"ntu60_{self.benchmark}_{self.split}_{self.joint_type}_{self.max_bodies}bodies",
         )
 
     def extract(self):

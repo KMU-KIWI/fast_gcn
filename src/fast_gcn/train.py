@@ -45,9 +45,6 @@ def train(args):
 
     trainer = pl.Trainer.from_argparse_args(
         args,
-        devices=1,
-        accelerator="gpu",
-        precision=16,
         callbacks=[
             RichModelSummary(),
             RichProgressBar(),
@@ -55,8 +52,7 @@ def train(args):
             lr_monitor,
         ],
         logger=wandb_logger,
-        max_epochs=16,
-        min_epochs=5,
+        min_epochs=16,
     )
 
     trainer.fit(model, data)

@@ -11,8 +11,9 @@ from fast_gcn import transforms
 class NTU60DataModule(LightningDataModule):
     def __init__(
         self,
-        batch_size: int,
         data_dir: str,
+        batch_size: int,
+        eval_batch_size: int = 1024,
         benchmark_type: str = "xsub",
         joint_type: Union[List[str], str] = "3d",
         max_bodies: int = 2,
@@ -45,7 +46,7 @@ class NTU60DataModule(LightningDataModule):
                 joint_type=self.hparams.joint_type,
                 max_bodies=self.hparams.max_bodies,
                 transform=self.train_transform,
-                download=True,
+                download=self.hparams.download,
             )
             self.val_set = NTU60(
                 root=self.hparams.data_dir,
@@ -54,7 +55,7 @@ class NTU60DataModule(LightningDataModule):
                 joint_type=self.hparams.joint_type,
                 max_bodies=self.hparams.max_bodies,
                 transform=self.train_transform,
-                download=True,
+                download=self.hparams.download,
             )
 
     def train_dataloader(self):
@@ -72,7 +73,7 @@ class NTU60DataModule(LightningDataModule):
             self.val_set,
             num_workers=self.hparams.num_workers,
             pin_memory=True,
-            batch_size=self.hparams.batch_size,
+            batch_size=self.hparams.eval_batch_size,
         )
 
     def test_dataloader(self):
@@ -80,15 +81,16 @@ class NTU60DataModule(LightningDataModule):
             self.val_set,
             num_workers=self.hparams.num_workers,
             pin_memory=True,
-            batch_size=self.hparams.batch_size,
+            batch_size=self.hparams.eval_batch_size,
         )
 
 
 class NTU120DataModule(LightningDataModule):
     def __init__(
         self,
-        batch_size: int,
         data_dir: str,
+        batch_size: int,
+        eval_batch_size: int = 1024,
         benchmark: str = "xsub",
         joint_type: Union[List[str], str] = "3d",
         max_bodies: int = 2,
