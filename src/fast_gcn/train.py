@@ -1,7 +1,7 @@
 import argparse
 
 import torch
-from thop import profile
+from fvcore.nn import FlopCountAnalysis, flop_count_table
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import (
@@ -60,9 +60,8 @@ def train(args):
 
     x = torch.randn(1, 30, 2, 25, 3)
 
-    macs, params = profile(model.model, inputs=(x,))
-
-    print(f"{macs / 1e9} GMACS  {params / 1e6}M params")
+    flops = FlopCountAnalysis(model.model, x)
+    print(flop_count_table(flops))
 
     trainer.fit(model, data)
 
