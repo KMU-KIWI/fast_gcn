@@ -23,6 +23,4 @@ def sample_frames(x: Tensor, length: int):
             index = torch.randint(chunk_length, (1,))
             sampled_frames.append(chunk[index])
 
-    assert len(sampled_frames) == length, print(len(chunks))
-
-    return torch.cat(sampled_frames, dim=0)
+        return torch.cat(sampled_frames, dim=0)
