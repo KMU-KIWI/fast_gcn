@@ -157,8 +157,11 @@ class NTU(Dataset):
     def process(self, root):
         self.edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
 
+        """
         with Pool() as p:
             raw_data_list = p.map(self.process_path, self.raw_file_paths)
+        """
+        raw_data_list = map(self.process_path, self.raw_file_paths)
 
         data_list = []
         for data in raw_data_list:

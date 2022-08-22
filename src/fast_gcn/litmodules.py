@@ -96,6 +96,11 @@ class LitSGN(pl.LightningModule):
         return self._step(batch, stage="val")
 
     def test_step(self, batch, batch_idx):
+        x, edge_index, labels = batch
+        x = x.flatten(0, 1)
+        labels = labels.flatten(0, 2)
+        batch = (x, edge_index, labels)
+
         return self._step(batch, stage="test")
 
     def _log_metric(self, stage):
